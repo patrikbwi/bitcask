@@ -25,6 +25,8 @@
          close/1,
          close_write_file/1,
          get/2,
+         get/4,
+         get_bitcask_entry/2,
          put/3,
          delete/2,
          sync/1,
@@ -203,14 +205,23 @@ close_write_file(Ref) ->
 
 %% @doc Retrieve a value by key from a bitcask datastore.
 -spec get(reference(), binary()) ->
-                 not_found | {ok, Value::binary()} | {error, Err::term()}.
+                 not_found | {ok, Value::binary()} | {ok, Value::binary(), BCE::tuple()}
+                     | {error, Err::term()}.
 get(Ref, Key) ->
     get(Ref, Key, 2).
 
 -spec get(reference(), binary(), integer()) ->
-                 not_found | {ok, Value::binary()} | {error, Err::term()}.
-get(_Ref, _Key, 0) -> {error, nofile};
+                 not_found | {ok, Value::binary()} | {ok, Value::binary(), BCE::tuple()}
+                     | {error, Err::term()}.
 get(Ref, Key, TryNum) ->
+    get(Ref, Key, TryNum, false).
+
+-spec get(reference(), binary(), integer(), boolean()) ->
+                 not_found | {ok, Value::binary()} | {ok, Value::binary(), E::tuple()}
+                     | {error, Err::term()}.
+get(_Ref, _Key, 0, _ReturnBCE) ->
+    {error, nofile};
+get(Ref, Key, TryNum, ReturnBCE) ->
     State = get_state(Ref),
     case bitcask_nifs:keydir_get(State#bc_state.keydir, Key, State#bc_state.read_write_p) of
         not_found ->
@@ -227,7 +238,7 @@ get(Ref, Key, TryNum) ->
                     case ?MODULE:get_filestate(E#bitcask_entry.file_id, State) of
                         {error, enoent} ->
                             %% merging deleted file between keydir_get and here
-                            get(Ref, Key, TryNum-1);
+                            get(Ref, Key, TryNum-1, ReturnBCE);
                         {Filestate, S2} ->
                             put_state(Ref, S2),
                             case bitcask_fileops:read(Filestate,
@@ -235,6 +246,8 @@ get(Ref, Key, TryNum) ->
                                                     E#bitcask_entry.total_sz) of
                                 {ok, _Key, ?TOMBSTONE} ->
                                     not_found;
+                                {ok, _Key, Value} when ReturnBCE == true ->
+                                    {ok, Value, E};
                                 {ok, _Key, Value} ->
                                     {ok, Value};
                                 {error, eof} ->
@@ -244,6 +257,17 @@ get(Ref, Key, TryNum) ->
                             end
                     end
             end
+    end.
+
+%% @doc Retrieve a #bitcask_entry by key from a bitcask datastore.
+-spec get_bitcask_entry(reference(), binary()) -> not_found | {ok, E::tuple()}.
+get_bitcask_entry(Ref, Key) ->
+    State = get_state(Ref),
+    case bitcask_nifs:keydir_get(State#bc_state.keydir, Key, State#bc_state.read_write_p) of
+        not_found ->
+            not_found;
+        E when is_record(E, bitcask_entry) ->
+            {ok, E}
     end.
 
 %% @doc Store a key and value in a bitcase datastore.
